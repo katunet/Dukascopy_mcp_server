@@ -17,6 +17,22 @@ from typing import Any
 import httpx
 
 BASE_URL = "https://datafeed.dukascopy.com/datafeed"
+
+# WD_Black SSD が接続中ならそこを使い、未接続ならローカルにフォールバック
+_WD_BLACK_CACHE = Path("/Volumes/WD_Black/Dukascopy_mcp/cache")
+_LOCAL_CACHE = Path(__file__).resolve().parent / "cache"
+
+
+def resolve_cache_dir() -> Path:
+    """キャッシュディレクトリを解決する。
+
+    WD_Black SSD が /Volumes/WD_Black にマウントされていればそのパスを返す。
+    未接続の場合はスクリプト隣の cache/ をフォールバックとして返す。
+    """
+    if _WD_BLACK_CACHE.parent.parent.exists():  # /Volumes/WD_Black/ が存在する
+        _WD_BLACK_CACHE.mkdir(parents=True, exist_ok=True)
+        return _WD_BLACK_CACHE
+    return _LOCAL_CACHE
 TICK_RECORD_SIZE = 20
 CANDLE_RECORD_SIZE = 24
 MAX_CONCURRENT = 5
@@ -144,6 +160,39 @@ class DukascopyClient:
         raw = self.decompress_bi5(compressed)
         day_start = datetime(year, month, day, 0, 0, 0, tzinfo=timezone.utc)
         return self.parse_candles(raw, day_start, symbol)
+
+    def _read_candles_csv(self, symbol: str, date_str: str) -> list[dict[str, Any]] | None:
+        """キャッシュCSVから1分足を読む。ファイルが存在しなければ None を返す。"""
+        path = self._cache_dir / symbol.upper() / "candles" / f"{date_str}.csv"
+        if not path.exists():
+            return None
+        candles: list[dict[str, Any]] = []
+        with open(path, newline="") as f:
+            for row in csv.DictReader(f):
+                candles.append({
+                    "timestamp": row["timestamp"],
+                    "open":   float(row["open"]),
+                    "high":   float(row["high"]),
+                    "low":    float(row["low"]),
+                    "close":  float(row["close"]),
+                    "volume": float(row["volume"]),
+                })
+        return candles
+
+    async def fetch_day_candles_cached(self, symbol: str, year: int, month: int, day: int) -> list[dict[str, Any]]:
+        """キャッシュ優先でH1日分の1分足を取得する。
+
+        キャッシュ（WD_Black または ローカル）にCSVがあればそこから読み込む。
+        なければDukascopyから取得しキャッシュに保存する。
+        """
+        date_str = f"{year:04d}-{month:02d}-{day:02d}"
+        cached = self._read_candles_csv(symbol, date_str)
+        if cached is not None:
+            return cached
+        candles = await self.fetch_day_candles(symbol, year, month, day)
+        if candles:
+            self.write_candles_csv(symbol, date_str, candles)
+        return candles
 
     # --- Task 6: CSV保存 + 一括ダウンロード ---
 
