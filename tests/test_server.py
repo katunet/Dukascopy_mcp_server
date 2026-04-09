@@ -9,7 +9,7 @@ from server import TOOLS, app
 
 class TestServerTools:
     def test_tool_count(self):
-        assert len(TOOLS) == 6
+        assert len(TOOLS) == 10
 
     def test_tool_names(self):
         names = {t.name for t in TOOLS}
@@ -20,6 +20,10 @@ class TestServerTools:
             "download_candles",
             "cache_status",
             "clear_cache",
+            "calibrate",
+            "reshape",
+            "calibration_status",
+            "get_reshaped_ticks",
         }
 
     def test_get_ticks_schema_requires_symbol_date_hour(self):
