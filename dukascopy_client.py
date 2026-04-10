@@ -62,13 +62,11 @@ DEFAULT_POINT_VALUE = 1e5
 
 class DukascopyClient:
     TIMEOUT = 30.0
-    USER_AGENT = "dukascopy-mcp/1.0"
 
     def __init__(self, cache_dir: str | Path = "cache"):
         self._cache_dir = Path(cache_dir)
         self._http = httpx.AsyncClient(
             timeout=self.TIMEOUT,
-            headers={"User-Agent": self.USER_AGENT},
         )
 
     @staticmethod
@@ -218,15 +216,37 @@ class DukascopyClient:
                 writer.writerow([c["timestamp"], c["open"], c["high"], c["low"], c["close"], c["volume"]])
         return file_path
 
+    def _progress_log_path(self, symbol: str, kind: str) -> Path:
+        return self._cache_dir / symbol.upper() / kind / ".download_progress.log"
+
+    def _log_progress(self, log_path: Path, message: str) -> None:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(log_path, "a", encoding="utf-8") as f:
+            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            f.write(f"{ts} {message}\n")
+
     async def download_ticks(self, symbol: str, start: str, end: str) -> dict[str, Any]:
         start_date = datetime.strptime(start, "%Y-%m-%d").date()
         end_date = datetime.strptime(end, "%Y-%m-%d").date()
+        total_days = (end_date - start_date).days + 1
         total_ticks = 0
-        days = 0
+        days_downloaded = 0
+        days_skipped = 0
         current = start_date
         sem = asyncio.Semaphore(MAX_CONCURRENT)
+        log_path = self._progress_log_path(symbol, "ticks")
+        self._log_progress(log_path, f"[START] {symbol} ticks {start} ~ {end} (total {total_days} days)")
 
         while current <= end_date:
+            date_str = current.isoformat()
+            csv_path = self._cache_dir / symbol.upper() / "ticks" / f"{date_str}.csv"
+            elapsed = (current - start_date).days + 1
+            if csv_path.exists():
+                days_skipped += 1
+                self._log_progress(log_path, f"[SKIP]  {date_str} (already cached) [{elapsed}/{total_days}]")
+                current += timedelta(days=1)
+                continue
+
             day_ticks = []
             for hour in range(24):
                 async with sem:
@@ -236,45 +256,70 @@ class DukascopyClient:
                     day_ticks.extend(ticks)
                     await asyncio.sleep(REQUEST_DELAY)
             if day_ticks:
-                self.write_ticks_csv(symbol, current.isoformat(), day_ticks)
+                self.write_ticks_csv(symbol, date_str, day_ticks)
                 total_ticks += len(day_ticks)
-                days += 1
+                days_downloaded += 1
+                self._log_progress(log_path, f"[OK]    {date_str} {len(day_ticks):>6} ticks [{elapsed}/{total_days}]")
+            else:
+                self._log_progress(log_path, f"[EMPTY] {date_str} (no data) [{elapsed}/{total_days}]")
             current += timedelta(days=1)
 
         cache_path = self._cache_dir / symbol.upper() / "ticks"
         size_mb = sum(f.stat().st_size for f in cache_path.glob("*.csv")) / (1024 * 1024) if cache_path.exists() else 0
+        self._log_progress(log_path, f"[DONE]  downloaded={days_downloaded} skipped={days_skipped} ticks={total_ticks} size={round(size_mb,2)}MB")
         return {
             "path": str(cache_path),
-            "days": days,
+            "days_downloaded": days_downloaded,
+            "days_skipped": days_skipped,
             "total_ticks": total_ticks,
             "size_mb": round(size_mb, 2),
+            "progress_log": str(log_path),
         }
 
     async def download_candles(self, symbol: str, start: str, end: str) -> dict[str, Any]:
         start_date = datetime.strptime(start, "%Y-%m-%d").date()
         end_date = datetime.strptime(end, "%Y-%m-%d").date()
+        total_days = (end_date - start_date).days + 1
         total_candles = 0
-        days = 0
+        days_downloaded = 0
+        days_skipped = 0
         current = start_date
+        log_path = self._progress_log_path(symbol, "candles")
+        self._log_progress(log_path, f"[START] {symbol} candles {start} ~ {end} (total {total_days} days)")
 
         while current <= end_date:
+            date_str = current.isoformat()
+            csv_path = self._cache_dir / symbol.upper() / "candles" / f"{date_str}.csv"
+            elapsed = (current - start_date).days + 1
+            if csv_path.exists():
+                days_skipped += 1
+                self._log_progress(log_path, f"[SKIP]  {date_str} (already cached) [{elapsed}/{total_days}]")
+                current += timedelta(days=1)
+                continue
+
             candles = await self.fetch_day_candles(
                 symbol, current.year, current.month, current.day
             )
             if candles:
-                self.write_candles_csv(symbol, current.isoformat(), candles)
+                self.write_candles_csv(symbol, date_str, candles)
                 total_candles += len(candles)
-                days += 1
+                days_downloaded += 1
+                self._log_progress(log_path, f"[OK]    {date_str} {len(candles):>4} candles [{elapsed}/{total_days}]")
+            else:
+                self._log_progress(log_path, f"[EMPTY] {date_str} (no data) [{elapsed}/{total_days}]")
             current += timedelta(days=1)
             await asyncio.sleep(REQUEST_DELAY)
 
         cache_path = self._cache_dir / symbol.upper() / "candles"
         size_mb = sum(f.stat().st_size for f in cache_path.glob("*.csv")) / (1024 * 1024) if cache_path.exists() else 0
+        self._log_progress(log_path, f"[DONE]  downloaded={days_downloaded} skipped={days_skipped} candles={total_candles} size={round(size_mb,2)}MB")
         return {
             "path": str(cache_path),
-            "days": days,
+            "days_downloaded": days_downloaded,
+            "days_skipped": days_skipped,
             "total_candles": total_candles,
             "size_mb": round(size_mb, 2),
+            "progress_log": str(log_path),
         }
 
     # --- Task 7: キャッシュ管理 ---

@@ -9,7 +9,7 @@ import asyncio
 import csv
 import json
 import os
-from datetime import datetime, timedelta
+from datetime import date as _date, datetime, timedelta
 from pathlib import Path
 
 from mcp.server import Server
@@ -217,7 +217,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         elif name == "get_candles":
             date_parts = arguments["date"].split("-")
             year, month, day = int(date_parts[0]), int(date_parts[1]), int(date_parts[2])
-            candles = await client.fetch_day_candles(
+            candles = await client.fetch_day_candles_cached(
                 arguments["symbol"], year, month, day
             )
             hour = arguments["hour"]
@@ -269,7 +269,6 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 calendar.load_events(start=start, end=end, impact="High")
 
             # 日単位でアライメント → 全ペアを集約
-            from datetime import date as _date
             all_pairs = []
             current = _date.fromisoformat(start)
             end_d   = _date.fromisoformat(end)
@@ -326,7 +325,6 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             model = CalibrationModel.load(model_path)
 
             reshaped_root = _resolve(_WD_RESHAPED, _LOCAL_RESHAPED)
-            from datetime import date as _date
             total_written = 0
             days = 0
             current = _date.fromisoformat(start)
