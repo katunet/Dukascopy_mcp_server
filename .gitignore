@@ -2,3 +2,10 @@ cache/
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# macOS
+.DS_Store
+
+# ローカル環境設定
+.mcp.json
+.env
